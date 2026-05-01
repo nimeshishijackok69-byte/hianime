@@ -1,4 +1,9 @@
 (function () {
+  if (window.__dgLiveSubtitleBootstrapped) {
+    return;
+  }
+  window.__dgLiveSubtitleBootstrapped = true;
+
   const ROOT_ID = "dg-live-subtitle-overlay";
   const STYLE_ID = "dg-live-subtitle-style";
 
@@ -77,7 +82,7 @@
       root = document.createElement("div");
       root.id = ROOT_ID;
       root.setAttribute("aria-live", "polite");
-      document.body.appendChild(root);
+      (document.body || document.documentElement).appendChild(root);
     }
 
     state.root = root;

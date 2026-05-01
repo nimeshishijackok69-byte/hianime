@@ -73,8 +73,10 @@ async function startSession({ tabId, config }) {
   lastOverlayConfig = config;
   currentState = "creating_offscreen";
 
-  await injectContentScript(tabId);
-  await sendToTab(tabId, {
+  await ensureOverlayAndSend(tabId, {
+    type: "CLEAR_ALL"
+  });
+  await ensureOverlayAndSend(tabId, {
     type: "APPLY_SETTINGS",
     config
   });
@@ -141,6 +143,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       case "OFFSCREEN_STATE":
         currentState = message.state;
+        if (message.state === "idle") {
+          activeTabId = null;
+        }
         chrome.runtime.sendMessage({
           type: "STATE",
           state: message.state

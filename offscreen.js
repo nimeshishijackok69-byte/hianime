@@ -80,24 +80,13 @@ async function forwardTranscript(tabId, event) {
   });
 }
 
-async function stopSession(options = {}) {
-  const finalState = options.finalState || "idle";
-
-  if (!session) {
-    await setState(finalState);
-    return;
-  }
-
-  intentionalStop = true;
-  await setState("stopping");
-
-  const current = session;
-  session = null;
-
+async function disposeSessionResources(current) {
   try {
     if (current.websocket?.readyState === WebSocket.OPEN) {
       current.websocket.send(JSON.stringify({ type: "Finalize" }));
       current.websocket.close(1000, "Stopped by user");
+    } else if (current.websocket && current.websocket.readyState < WebSocket.CLOSING) {
+      current.websocket.close();
     }
   } catch {}
 
@@ -117,6 +106,22 @@ async function stopSession(options = {}) {
   for (const track of current.displayStream?.getTracks() || []) {
     track.stop();
   }
+}
+
+async function stopSession(options = {}) {
+  const finalState = options.finalState || "idle";
+
+  if (!session) {
+    await setState(finalState);
+    return;
+  }
+
+  intentionalStop = true;
+  await setState("stopping");
+
+  const current = session;
+  session = null;
+  await disposeSessionResources(current);
 
   await sendRuntimeMessage({
     type: "OFFSCREEN_CLEAR_INTERIM",
@@ -144,6 +149,10 @@ async function startSession(tabId, config) {
 
   try {
     await setState("awaiting_capture_permission");
+    await sendRuntimeMessage({
+      type: "OFFSCREEN_CLEAR_ALL",
+      tabId
+    });
 
     displayStream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
@@ -190,6 +199,7 @@ async function startSession(tabId, config) {
     workletNode.connect(silenceNode);
     silenceNode.connect(audioContext.destination);
 
+    await setState("connecting_deepgram");
     const websocket = new WebSocket(buildDeepgramUrl(config), ["token", config.apiKey]);
     websocket.binaryType = "arraybuffer";
 
@@ -255,18 +265,12 @@ async function startSession(tabId, config) {
       stopSession({ finalState: "error" });
     });
 
-    await setState("connecting_deepgram");
   } catch (error) {
     if (!session) {
-      for (const track of displayStream?.getTracks() || []) {
-        track.stop();
-      }
-
-      try {
-        if (audioContext?.state !== "closed") {
-          await audioContext.close();
-        }
-      } catch {}
+      await disposeSessionResources({
+        displayStream,
+        audioContext
+      });
     }
 
     await stopSession();
