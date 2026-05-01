@@ -78,7 +78,8 @@ function getSessionConfig() {
   return {
     ...getOverlayConfig(),
     apiKey: getApiKey(),
-    language: "ja"
+    language: "ja",
+    model: "nova-3"
   };
 }
 

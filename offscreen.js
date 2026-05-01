@@ -34,18 +34,22 @@ function reportError(code, message) {
 
 function buildDeepgramUrl(config) {
   const params = new URLSearchParams({
+    model: config.model || "nova-3",
     language: config.language || "ja",
     encoding: "linear16",
     sample_rate: String(TARGET_SAMPLE_RATE),
     channels: "1",
     interim_results: "true",
-    endpointing: "250",
-    utterance_end_ms: "700",
-    smart_format: "false"
+    endpointing: String(config.endpointing || 300)
   });
 
-  if (config.model) {
-    params.set("model", config.model);
+  if (config.utteranceEndMs) {
+    params.set("utterance_end_ms", String(config.utteranceEndMs));
+    params.set("vad_events", "true");
+  }
+
+  if (config.smartFormat) {
+    params.set("smart_format", "true");
   }
 
   return `${DEEPGRAM_BASE_URL}?${params.toString()}`;
@@ -259,7 +263,7 @@ function connectDeepgram(current, attempt = 0) {
       return;
     }
 
-    reportError("DG_CLOSED", "Deepgram connection closed");
+    reportError("DG_CLOSED", `Deepgram connection closed (${event.code || "no code"})`);
     stopSession({ finalState: STATE.ERROR });
   });
 }
