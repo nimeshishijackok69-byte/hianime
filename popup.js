@@ -17,6 +17,15 @@ const STATUS_LABELS = {
   error: "Error"
 };
 
+const ACTIVE_SESSION_STATES = new Set([
+  "creating_offscreen",
+  "awaiting_capture_permission",
+  "capturing",
+  "connecting_deepgram",
+  "listening",
+  "stopping"
+]);
+
 const els = {
   apiKey: document.getElementById("apiKey"),
   saveKey: document.getElementById("saveKey"),
@@ -34,6 +43,8 @@ const els = {
   statusText: document.getElementById("statusText"),
   statusDot: document.getElementById("statusDot")
 };
+
+let overlaySaveTimer = null;
 
 function storageGet(keys) {
   return chrome.storage.local.get(keys);
@@ -57,11 +68,25 @@ function getOverlayConfig() {
   };
 }
 
+function getApiKey() {
+  return els.apiKey.value.trim();
+}
+
 function getSessionConfig() {
   return {
     ...getOverlayConfig(),
-    apiKey: els.apiKey.value.trim(),
+    apiKey: getApiKey(),
     language: "ja"
+  };
+}
+
+function getPersistedOverlaySettings() {
+  const config = getOverlayConfig();
+  return {
+    "overlay.lines": config.lines,
+    "overlay.fontSize": config.fontSize,
+    "overlay.opacity": config.opacity,
+    "overlay.showInterim": config.showInterim
   };
 }
 
@@ -72,13 +97,18 @@ function updateValueLabels() {
 }
 
 function updateStartState() {
-  els.start.disabled = els.apiKey.value.trim().length === 0;
+  const hasApiKey = getApiKey().length > 0;
+  const isBusy = ACTIVE_SESSION_STATES.has(els.statusDot.dataset.state || "idle");
+  els.start.disabled = !hasApiKey || isBusy;
+  els.stop.disabled = !isBusy;
 }
 
 function setStatus(state, detail = "") {
+  els.statusDot.dataset.state = state;
   els.statusText.textContent = detail || STATUS_LABELS[state] || state;
   els.statusDot.classList.toggle("live", state === "listening");
   els.statusDot.classList.toggle("error", state === "error");
+  updateStartState();
 }
 
 async function getActiveTabId() {
@@ -94,23 +124,36 @@ async function getActiveTabId() {
   return tab.id;
 }
 
-async function saveSettings() {
-  const config = getOverlayConfig();
-  const apiKey = els.apiKey.value.trim();
-  await storageSet({
-    deepgramApiKey: apiKey,
-    "overlay.lines": config.lines,
-    "overlay.fontSize": config.fontSize,
-    "overlay.opacity": config.opacity,
-    "overlay.showInterim": config.showInterim
-  });
+async function persistOverlaySettings() {
+  await storageSet(getPersistedOverlaySettings());
+}
+
+async function persistApiKey() {
+  const apiKey = getApiKey();
+  await storageSet({ deepgramApiKey: apiKey });
   els.keyHint.textContent = apiKey ? "Saved locally." : "Enter a Deepgram API key to start.";
   updateStartState();
 }
 
-async function applySettingsToTab() {
+async function persistAllSettings() {
+  await storageSet({
+    deepgramApiKey: getApiKey(),
+    ...getPersistedOverlaySettings()
+  });
+  els.keyHint.textContent = getApiKey() ? "Saved locally." : "Enter a Deepgram API key to start.";
+  updateStartState();
+}
+
+function scheduleOverlaySettingsSave() {
+  window.clearTimeout(overlaySaveTimer);
+  overlaySaveTimer = window.setTimeout(() => {
+    persistOverlaySettings().catch((error) => setStatus("error", error.message));
+  }, 200);
+}
+
+async function applyOverlaySettingsToTab() {
   updateValueLabels();
-  await saveSettings();
+  scheduleOverlaySettingsSave();
 
   try {
     const tabId = await getActiveTabId();
@@ -131,7 +174,7 @@ async function startSession() {
     return;
   }
 
-  await saveSettings();
+  await persistAllSettings();
   const tabId = await getActiveTabId();
   setStatus("creating_offscreen");
 
@@ -170,7 +213,7 @@ async function load() {
   els.showInterim.checked = Boolean(values["overlay.showInterim"]);
 
   updateValueLabels();
-  updateStartState();
+  setStatus("idle");
 
   const status = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
   if (status?.ok) {
@@ -181,21 +224,25 @@ async function load() {
 }
 
 els.saveKey.addEventListener("click", () => {
-  saveSettings().catch((error) => setStatus("error", error.message));
+  persistApiKey().catch((error) => setStatus("error", error.message));
 });
 
 els.clearKey.addEventListener("click", async () => {
   els.apiKey.value = "";
+  window.clearTimeout(overlaySaveTimer);
   await storageRemove(["deepgramApiKey"]);
   els.keyHint.textContent = "Key cleared.";
   updateStartState();
 });
 
-els.apiKey.addEventListener("input", updateStartState);
+els.apiKey.addEventListener("input", () => {
+  els.keyHint.textContent = getApiKey() ? "Unsaved API key changes." : "Enter a Deepgram API key to start.";
+  updateStartState();
+});
 
 for (const input of [els.lines, els.fontSize, els.opacity, els.showInterim]) {
   input.addEventListener("input", () => {
-    applySettingsToTab().catch((error) => setStatus("error", error.message));
+    applyOverlaySettingsToTab().catch((error) => setStatus("error", error.message));
   });
 }
 

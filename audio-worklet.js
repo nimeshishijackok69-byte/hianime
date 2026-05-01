@@ -8,10 +8,13 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       160,
       Math.round(this.targetSampleRate * (processorOptions.chunkMs || 40) / 1000)
     );
-    this.ratio = sampleRate / this.targetSampleRate;
-    this.sourceBuffer = [];
-    this.readIndex = 0;
-    this.pendingSamples = [];
+    this.sampleStep = sampleRate / this.targetSampleRate;
+    this.nextOutputIndex = 0;
+    this.inputIndex = 0;
+    this.lastMonoSample = 0;
+    this.hasLastSample = false;
+    this.pendingBuffer = new Int16Array(this.chunkSamples);
+    this.pendingCount = 0;
   }
 
   process(inputs, outputs) {
@@ -28,31 +31,34 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 
     const frameLength = input[0].length;
     for (let i = 0; i < frameLength; i += 1) {
-      let sample = 0;
+      let monoSample = 0;
       for (let channel = 0; channel < input.length; channel += 1) {
-        sample += input[channel][i] || 0;
+        monoSample += input[channel][i] || 0;
       }
-      this.sourceBuffer.push(sample / input.length);
-    }
+      monoSample /= input.length;
 
-    while (this.readIndex + 1 < this.sourceBuffer.length) {
-      const baseIndex = Math.floor(this.readIndex);
-      const fraction = this.readIndex - baseIndex;
-      const current = this.sourceBuffer[baseIndex];
-      const next = this.sourceBuffer[baseIndex + 1];
-      const interpolated = current + (next - current) * fraction;
-      this.pendingSamples.push(this.floatToInt16(interpolated));
-      this.readIndex += this.ratio;
-
-      if (this.pendingSamples.length >= this.chunkSamples) {
-        this.flushChunk();
+      if (!this.hasLastSample) {
+        this.lastMonoSample = monoSample;
+        this.hasLastSample = true;
+        this.inputIndex += 1;
+        continue;
       }
-    }
 
-    const consumed = Math.floor(this.readIndex);
-    if (consumed > 0) {
-      this.sourceBuffer = this.sourceBuffer.slice(consumed);
-      this.readIndex -= consumed;
+      while (this.nextOutputIndex <= this.inputIndex) {
+        const fraction = this.nextOutputIndex - (this.inputIndex - 1);
+        const interpolated = this.lastMonoSample + (monoSample - this.lastMonoSample) * fraction;
+        this.pendingBuffer[this.pendingCount] = this.floatToInt16(interpolated);
+        this.pendingCount += 1;
+
+        if (this.pendingCount === this.chunkSamples) {
+          this.flushChunk();
+        }
+
+        this.nextOutputIndex += this.sampleStep;
+      }
+
+      this.lastMonoSample = monoSample;
+      this.inputIndex += 1;
     }
 
     return true;
@@ -64,13 +70,14 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   }
 
   flushChunk() {
-    const samples = this.pendingSamples.splice(0, this.chunkSamples);
-    const buffer = new ArrayBuffer(samples.length * 2);
+    const buffer = new ArrayBuffer(this.chunkSamples * 2);
     const view = new DataView(buffer);
 
-    for (let i = 0; i < samples.length; i += 1) {
-      view.setInt16(i * 2, samples[i], true);
+    for (let i = 0; i < this.chunkSamples; i += 1) {
+      view.setInt16(i * 2, this.pendingBuffer[i], true);
     }
+
+    this.pendingCount = 0;
 
     this.port.postMessage({
       type: "PCM_CHUNK",
