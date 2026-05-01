@@ -50,6 +50,7 @@
         bottom: 6%;
         transform: translateX(-50%);
         z-index: 2147483647;
+        width: min(80vw, 760px);
         max-width: min(80vw, 980px);
         pointer-events: auto;
         user-select: text;

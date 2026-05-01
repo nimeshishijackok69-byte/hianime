@@ -289,18 +289,31 @@ async function startSession(tabId, config) {
     });
 
     displayStream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,
+      video: {
+        displaySurface: "browser"
+      },
       audio: {
         echoCancellation: false,
         noiseSuppression: false,
         autoGainControl: false
       },
-      preferCurrentTab: true,
+      selfBrowserSurface: "exclude",
       systemAudio: "include",
       surfaceSwitching: "include"
     });
 
     const [audioTrack] = displayStream.getAudioTracks();
+    const [videoTrack] = displayStream.getVideoTracks();
+    const captureLabel = `${videoTrack?.label || ""} ${audioTrack?.label || ""}`;
+    if (/live subtitle audio worker|chrome-extension/i.test(captureLabel)) {
+      for (const track of displayStream.getTracks()) {
+        track.stop();
+      }
+      await reportError("WRONG_CAPTURE_SOURCE", "Choose the anime tab, not the extension page");
+      await setState(STATE.IDLE);
+      return;
+    }
+
     if (!audioTrack) {
       for (const track of displayStream.getTracks()) {
         track.stop();
