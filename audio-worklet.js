@@ -24,6 +24,10 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       (processorOptions.vadHangoverMs || 250) / (processorOptions.chunkMs || 40)
     );
     this.vadHangoverRemaining = 0;
+    this.preRollChunks = Math.ceil(
+      (processorOptions.vadPreRollMs || 200) / (processorOptions.chunkMs || 40)
+    );
+    this.preRollBuffers = [];
     this.lowPassSample = 0;
     this.hasLowPassSample = false;
     this.lowPassAlpha = this.calculateLowPassAlpha(7200);
@@ -103,7 +107,23 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   flushChunk() {
     const rms = Math.sqrt(this.pendingEnergySum / this.chunkSamples);
     const hasVoice = rms >= this.vadThreshold;
-    const shouldSend = !this.vadEnabled || hasVoice || this.vadHangoverRemaining > 0;
+    const buffer = this.createChunkBuffer();
+
+    if (!this.vadEnabled) {
+      this.resetPendingChunk();
+      this.postChunk(buffer, rms);
+      return;
+    }
+
+    if (!hasVoice && this.vadHangoverRemaining === 0) {
+      this.storePreRoll(buffer);
+      this.resetPendingChunk();
+      return;
+    }
+
+    if (hasVoice && this.vadHangoverRemaining === 0) {
+      this.flushPreRoll();
+    }
 
     if (hasVoice) {
       this.vadHangoverRemaining = this.vadHangoverChunks;
@@ -111,12 +131,11 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       this.vadHangoverRemaining -= 1;
     }
 
-    if (!shouldSend) {
-      this.pendingCount = 0;
-      this.pendingEnergySum = 0;
-      return;
-    }
+    this.resetPendingChunk();
+    this.postChunk(buffer, rms);
+  }
 
+  createChunkBuffer() {
     const buffer = new ArrayBuffer(this.chunkSamples * 2);
     const view = new DataView(buffer);
 
@@ -124,9 +143,33 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       view.setInt16(i * 2, this.pendingBuffer[i], true);
     }
 
+    return buffer;
+  }
+
+  resetPendingChunk() {
     this.pendingCount = 0;
     this.pendingEnergySum = 0;
+  }
 
+  storePreRoll(buffer) {
+    if (this.preRollChunks <= 0) {
+      return;
+    }
+
+    this.preRollBuffers.push(buffer);
+    while (this.preRollBuffers.length > this.preRollChunks) {
+      this.preRollBuffers.shift();
+    }
+  }
+
+  flushPreRoll() {
+    for (const buffer of this.preRollBuffers) {
+      this.postChunk(buffer, 0);
+    }
+    this.preRollBuffers = [];
+  }
+
+  postChunk(buffer, rms) {
     this.port.postMessage({
       type: PCM_CHUNK,
       buffer,

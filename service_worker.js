@@ -9,13 +9,21 @@ let currentState = STATE.IDLE;
 let lastOverlayConfig = null;
 let lastTabMessageError = "";
 
-async function ensureOffscreenDocument() {
+async function getOffscreenContexts() {
   const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT);
-  const existingContexts = await chrome.runtime.getContexts({
+  return chrome.runtime.getContexts({
     contextTypes: ["OFFSCREEN_DOCUMENT"],
     documentUrls: [offscreenUrl]
   });
+}
 
+async function hasOffscreenDocument() {
+  const existingContexts = await getOffscreenContexts();
+  return existingContexts.length > 0;
+}
+
+async function ensureOffscreenDocument() {
+  const existingContexts = await getOffscreenContexts();
   if (existingContexts.length > 0) {
     return;
   }
@@ -30,6 +38,21 @@ async function ensureOffscreenDocument() {
 
   await creatingOffscreen;
   creatingOffscreen = null;
+}
+
+async function closeOffscreenDocumentIfPresent() {
+  if (await hasOffscreenDocument()) {
+    await chrome.offscreen.closeDocument();
+  }
+}
+
+function getOverlayConfig(config) {
+  return {
+    lines: config.lines,
+    fontSize: config.fontSize,
+    opacity: config.opacity,
+    showInterim: config.showInterim
+  };
 }
 
 async function injectContentScript(tabId) {
@@ -76,8 +99,10 @@ async function ensureOverlayAndSend(tabId, message) {
 }
 
 async function startSession({ tabId, config }) {
+  const overlayConfig = getOverlayConfig(config);
+
   activeTabId = tabId;
-  lastOverlayConfig = config;
+  lastOverlayConfig = overlayConfig;
   currentState = STATE.CREATING_OFFSCREEN;
 
   await ensureOverlayAndSend(tabId, {
@@ -85,7 +110,7 @@ async function startSession({ tabId, config }) {
   });
   await ensureOverlayAndSend(tabId, {
     type: MSG.APPLY_SETTINGS,
-    config
+    config: overlayConfig
   });
   await ensureOffscreenDocument();
   await chrome.runtime.sendMessage({
@@ -99,7 +124,16 @@ async function startSession({ tabId, config }) {
 }
 
 async function stopSession() {
-  await ensureOffscreenDocument();
+  if (!(await hasOffscreenDocument())) {
+    currentState = STATE.IDLE;
+    activeTabId = null;
+    chrome.runtime.sendMessage({
+      type: MSG.STATE,
+      state: STATE.IDLE
+    }).catch(() => {});
+    return { ok: true };
+  }
+
   await chrome.runtime.sendMessage({
     type: MSG.STOP,
     target: "offscreen"
@@ -129,8 +163,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const run = async () => {
     switch (message.type) {
       case MSG.ENSURE_OFFSCREEN:
-        await ensureOffscreenDocument();
-        return { ok: true };
+        return {
+          ok: true,
+          exists: await hasOffscreenDocument()
+        };
 
       case MSG.START_SESSION:
         return startSession(message);
@@ -157,6 +193,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           type: MSG.STATE,
           state: message.state
         }).catch(() => {});
+        if (message.state === STATE.IDLE || message.state === STATE.ERROR) {
+          await closeOffscreenDocumentIfPresent();
+        }
         return { ok: true };
 
       case MSG.OFFSCREEN_ERROR:

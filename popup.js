@@ -255,7 +255,6 @@ async function load() {
     setStatus(status.state || STATE.IDLE);
   }
 
-  chrome.runtime.sendMessage({ type: MSG.ENSURE_OFFSCREEN }).catch(() => {});
 }
 
 els.saveKey.addEventListener("click", () => {

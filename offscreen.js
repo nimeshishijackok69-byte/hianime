@@ -6,6 +6,7 @@ const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAYS = [1000, 2000, 4000];
 const BACKPRESSURE_LIMIT_BYTES = 1_000_000;
 const KEEPALIVE_INTERVAL_MS = 8000;
+const FINALIZE_GRACE_MS = 1200;
 
 let session = null;
 let lastInterimText = "";
@@ -98,12 +99,43 @@ function clearConnectionTimers(current) {
   }
 }
 
-async function disposeSessionResources(current) {
+function waitForDeepgramFinalize(current) {
+  if (current.websocket?.readyState !== WebSocket.OPEN) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+      current.finalizeResolve = null;
+      resolve();
+    };
+    const timer = setTimeout(finish, FINALIZE_GRACE_MS);
+
+    current.finalizeResolve = finish;
+
+    try {
+      current.websocket.send(JSON.stringify({ type: "Finalize" }));
+    } catch {
+      finish();
+    }
+  });
+}
+
+async function disposeSessionResources(current, options = {}) {
   clearConnectionTimers(current);
 
   try {
     if (current.websocket?.readyState === WebSocket.OPEN) {
-      current.websocket.send(JSON.stringify({ type: "Finalize" }));
+      if (options.waitForFinalTranscript) {
+        await waitForDeepgramFinalize(current);
+      }
       current.websocket.close(1000, "Stopped by user");
     } else if (current.websocket && current.websocket.readyState < WebSocket.CLOSING) {
       current.websocket.close();
@@ -140,8 +172,12 @@ async function stopSession(options = {}) {
   await setState(STATE.STOPPING);
 
   const current = session;
-  session = null;
-  await disposeSessionResources(current);
+  await disposeSessionResources(current, {
+    waitForFinalTranscript: finalState === STATE.IDLE
+  });
+  if (session === current) {
+    session = null;
+  }
 
   await sendRuntimeMessage({
     type: MSG.OFFSCREEN_CLEAR_INTERIM,
@@ -188,6 +224,9 @@ function connectDeepgram(current, attempt = 0) {
       const transcriptEvent = normalizeDeepgramResult(payload);
       if (transcriptEvent && session === current) {
         forwardTranscript(current.tabId, transcriptEvent);
+        if (transcriptEvent.isFinal && current.finalizeResolve) {
+          current.finalizeResolve();
+        }
       }
     } catch {
       reportError("DG_PARSE", "Deepgram sent an unreadable transcript event");
@@ -287,7 +326,8 @@ async function startSession(tabId, config) {
         chunkMs: config.chunkMs || 40,
         vadEnabled: config.vadEnabled !== false,
         vadThreshold: config.vadThreshold || 0.012,
-        vadHangoverMs: config.vadHangoverMs || 250
+        vadHangoverMs: config.vadHangoverMs || 250,
+        vadPreRollMs: config.vadPreRollMs || 200
       }
     });
     const silenceNode = audioContext.createGain();
@@ -309,7 +349,8 @@ async function startSession(tabId, config) {
       reconnectAttempt: 0,
       reconnectTimer: null,
       keepAliveTimer: null,
-      backpressureWarned: false
+      backpressureWarned: false,
+      finalizeResolve: null
     };
     const current = session;
 
