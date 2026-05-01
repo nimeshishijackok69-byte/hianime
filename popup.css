@@ -49,6 +49,10 @@ p {
   color: #526166;
   font-size: 12px;
   margin-top: 4px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status-dot {
@@ -94,6 +98,17 @@ p {
   padding: 9px 10px;
   background: #ffffff;
   color: #1f2528;
+}
+
+.field input.invalid {
+  border-color: #d63a2f;
+  box-shadow: 0 0 0 3px rgba(214, 58, 47, 0.12);
+}
+
+button.saved {
+  border-color: #0f766e;
+  background: #d8f3ee;
+  color: #0f766e;
 }
 
 .range-field {

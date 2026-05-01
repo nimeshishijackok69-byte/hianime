@@ -1,3 +1,5 @@
+const PCM_CHUNK = "PCM_CHUNK";
+
 class PcmCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
@@ -15,6 +17,16 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     this.hasLastSample = false;
     this.pendingBuffer = new Int16Array(this.chunkSamples);
     this.pendingCount = 0;
+    this.pendingEnergySum = 0;
+    this.vadEnabled = processorOptions.vadEnabled !== false;
+    this.vadThreshold = processorOptions.vadThreshold || 0.012;
+    this.vadHangoverChunks = Math.ceil(
+      (processorOptions.vadHangoverMs || 250) / (processorOptions.chunkMs || 40)
+    );
+    this.vadHangoverRemaining = 0;
+    this.lowPassSample = 0;
+    this.hasLowPassSample = false;
+    this.lowPassAlpha = this.calculateLowPassAlpha(7200);
   }
 
   process(inputs, outputs) {
@@ -35,7 +47,7 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       for (let channel = 0; channel < input.length; channel += 1) {
         monoSample += input[channel][i] || 0;
       }
-      monoSample /= input.length;
+      monoSample = this.lowPass(monoSample / input.length);
 
       if (!this.hasLastSample) {
         this.lastMonoSample = monoSample;
@@ -47,10 +59,12 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
       while (this.nextOutputIndex <= this.inputIndex) {
         const fraction = this.nextOutputIndex - (this.inputIndex - 1);
         const interpolated = this.lastMonoSample + (monoSample - this.lastMonoSample) * fraction;
-        this.pendingBuffer[this.pendingCount] = this.floatToInt16(interpolated);
+        const pcmSample = this.floatToInt16(interpolated);
+        this.pendingBuffer[this.pendingCount] = pcmSample;
+        this.pendingEnergySum += (pcmSample / 0x8000) ** 2;
         this.pendingCount += 1;
 
-        if (this.pendingCount === this.chunkSamples) {
+        if (this.pendingCount >= this.chunkSamples) {
           this.flushChunk();
         }
 
@@ -69,7 +83,40 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     return clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
   }
 
+  calculateLowPassAlpha(cutoffHz) {
+    const dt = 1 / sampleRate;
+    const rc = 1 / (2 * Math.PI * cutoffHz);
+    return dt / (rc + dt);
+  }
+
+  lowPass(sample) {
+    if (!this.hasLowPassSample) {
+      this.lowPassSample = sample;
+      this.hasLowPassSample = true;
+      return sample;
+    }
+
+    this.lowPassSample += this.lowPassAlpha * (sample - this.lowPassSample);
+    return this.lowPassSample;
+  }
+
   flushChunk() {
+    const rms = Math.sqrt(this.pendingEnergySum / this.chunkSamples);
+    const hasVoice = rms >= this.vadThreshold;
+    const shouldSend = !this.vadEnabled || hasVoice || this.vadHangoverRemaining > 0;
+
+    if (hasVoice) {
+      this.vadHangoverRemaining = this.vadHangoverChunks;
+    } else if (this.vadHangoverRemaining > 0) {
+      this.vadHangoverRemaining -= 1;
+    }
+
+    if (!shouldSend) {
+      this.pendingCount = 0;
+      this.pendingEnergySum = 0;
+      return;
+    }
+
     const buffer = new ArrayBuffer(this.chunkSamples * 2);
     const view = new DataView(buffer);
 
@@ -78,10 +125,12 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     }
 
     this.pendingCount = 0;
+    this.pendingEnergySum = 0;
 
     this.port.postMessage({
-      type: "PCM_CHUNK",
-      buffer
+      type: PCM_CHUNK,
+      buffer,
+      rms
     }, [buffer]);
   }
 }

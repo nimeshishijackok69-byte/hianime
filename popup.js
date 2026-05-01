@@ -1,3 +1,5 @@
+const { MSG, STATE } = globalThis.HIANIME;
+
 const DEFAULTS = {
   deepgramApiKey: "",
   "overlay.lines": 4,
@@ -7,23 +9,23 @@ const DEFAULTS = {
 };
 
 const STATUS_LABELS = {
-  idle: "Idle",
-  creating_offscreen: "Preparing audio engine",
-  awaiting_capture_permission: "Waiting for tab selection",
-  capturing: "Capturing audio",
-  connecting_deepgram: "Connecting to Deepgram",
-  listening: "Listening",
-  stopping: "Stopping",
-  error: "Error"
+  [STATE.IDLE]: "Idle",
+  [STATE.CREATING_OFFSCREEN]: "Preparing audio engine",
+  [STATE.AWAITING_CAPTURE_PERMISSION]: "Waiting for tab selection",
+  [STATE.CAPTURING]: "Capturing audio",
+  [STATE.CONNECTING_DEEPGRAM]: "Connecting to Deepgram",
+  [STATE.LISTENING]: "Listening",
+  [STATE.STOPPING]: "Stopping",
+  [STATE.ERROR]: "Error"
 };
 
 const ACTIVE_SESSION_STATES = new Set([
-  "creating_offscreen",
-  "awaiting_capture_permission",
-  "capturing",
-  "connecting_deepgram",
-  "listening",
-  "stopping"
+  STATE.CREATING_OFFSCREEN,
+  STATE.AWAITING_CAPTURE_PERMISSION,
+  STATE.CAPTURING,
+  STATE.CONNECTING_DEEPGRAM,
+  STATE.LISTENING,
+  STATE.STOPPING
 ]);
 
 const els = {
@@ -97,18 +99,26 @@ function updateValueLabels() {
 }
 
 function updateStartState() {
-  const hasApiKey = getApiKey().length > 0;
-  const isBusy = ACTIVE_SESSION_STATES.has(els.statusDot.dataset.state || "idle");
-  els.start.disabled = !hasApiKey || isBusy;
+  const key = getApiKey();
+  const hasValidApiKey = isApiKeyUsable(key);
+  const isBusy = ACTIVE_SESSION_STATES.has(els.statusDot.dataset.state || STATE.IDLE);
+  els.start.disabled = !hasValidApiKey || isBusy;
   els.stop.disabled = !isBusy;
+  els.apiKey.classList.toggle("invalid", key.length > 0 && !hasValidApiKey);
 }
 
 function setStatus(state, detail = "") {
+  const text = detail || STATUS_LABELS[state] || state;
   els.statusDot.dataset.state = state;
-  els.statusText.textContent = detail || STATUS_LABELS[state] || state;
-  els.statusDot.classList.toggle("live", state === "listening");
-  els.statusDot.classList.toggle("error", state === "error");
+  els.statusText.textContent = text;
+  els.statusText.title = text;
+  els.statusDot.classList.toggle("live", state === STATE.LISTENING);
+  els.statusDot.classList.toggle("error", state === STATE.ERROR);
   updateStartState();
+}
+
+function isApiKeyUsable(key) {
+  return key.length > 0 && (key.startsWith("dg_") || key.length >= 20);
 }
 
 async function getActiveTabId() {
@@ -130,24 +140,40 @@ async function persistOverlaySettings() {
 
 async function persistApiKey() {
   const apiKey = getApiKey();
+  if (apiKey && !isApiKeyUsable(apiKey)) {
+    els.keyHint.textContent = "That key does not look like a Deepgram API key.";
+    updateStartState();
+    return;
+  }
+
   await storageSet({ deepgramApiKey: apiKey });
   els.keyHint.textContent = apiKey ? "Saved locally." : "Enter a Deepgram API key to start.";
+  els.saveKey.classList.add("saved");
+  window.setTimeout(() => els.saveKey.classList.remove("saved"), 900);
   updateStartState();
 }
 
 async function persistAllSettings() {
+  const apiKey = getApiKey();
+  if (apiKey && !isApiKeyUsable(apiKey)) {
+    els.keyHint.textContent = "That key does not look like a Deepgram API key.";
+    updateStartState();
+    return false;
+  }
+
   await storageSet({
-    deepgramApiKey: getApiKey(),
+    deepgramApiKey: apiKey,
     ...getPersistedOverlaySettings()
   });
-  els.keyHint.textContent = getApiKey() ? "Saved locally." : "Enter a Deepgram API key to start.";
+  els.keyHint.textContent = apiKey ? "Saved locally." : "Enter a Deepgram API key to start.";
   updateStartState();
+  return true;
 }
 
 function scheduleOverlaySettingsSave() {
   window.clearTimeout(overlaySaveTimer);
   overlaySaveTimer = window.setTimeout(() => {
-    persistOverlaySettings().catch((error) => setStatus("error", error.message));
+    persistOverlaySettings().catch((error) => setStatus(STATE.ERROR, error.message));
   }, 200);
 }
 
@@ -158,7 +184,7 @@ async function applyOverlaySettingsToTab() {
   try {
     const tabId = await getActiveTabId();
     await chrome.runtime.sendMessage({
-      type: "APPLY_SETTINGS",
+      type: MSG.APPLY_SETTINGS,
       tabId,
       config: getOverlayConfig()
     });
@@ -170,16 +196,25 @@ async function applyOverlaySettingsToTab() {
 async function startSession() {
   const config = getSessionConfig();
   if (!config.apiKey) {
-    setStatus("error", "Add an API key first");
+    setStatus(STATE.ERROR, "Add an API key first");
     return;
   }
 
-  await persistAllSettings();
+  if (!isApiKeyUsable(config.apiKey)) {
+    setStatus(STATE.ERROR, "API key format looks wrong");
+    return;
+  }
+
+  const saved = await persistAllSettings();
+  if (!saved) {
+    return;
+  }
+
   const tabId = await getActiveTabId();
-  setStatus("creating_offscreen");
+  setStatus(STATE.CREATING_OFFSCREEN);
 
   const response = await chrome.runtime.sendMessage({
-    type: "START_SESSION",
+    type: MSG.START_SESSION,
     tabId,
     config
   });
@@ -190,9 +225,9 @@ async function startSession() {
 }
 
 async function stopSession() {
-  setStatus("stopping");
+  setStatus(STATE.STOPPING);
   const response = await chrome.runtime.sendMessage({
-    type: "STOP_SESSION"
+    type: MSG.STOP_SESSION
   });
 
   if (!response?.ok) {
@@ -213,18 +248,18 @@ async function load() {
   els.showInterim.checked = Boolean(values["overlay.showInterim"]);
 
   updateValueLabels();
-  setStatus("idle");
+  setStatus(STATE.IDLE);
 
-  const status = await chrome.runtime.sendMessage({ type: "GET_STATUS" });
+  const status = await chrome.runtime.sendMessage({ type: MSG.GET_STATUS });
   if (status?.ok) {
-    setStatus(status.state || "idle");
+    setStatus(status.state || STATE.IDLE);
   }
 
-  chrome.runtime.sendMessage({ type: "ENSURE_OFFSCREEN" }).catch(() => {});
+  chrome.runtime.sendMessage({ type: MSG.ENSURE_OFFSCREEN }).catch(() => {});
 }
 
 els.saveKey.addEventListener("click", () => {
-  persistApiKey().catch((error) => setStatus("error", error.message));
+  persistApiKey().catch((error) => setStatus(STATE.ERROR, error.message));
 });
 
 els.clearKey.addEventListener("click", async () => {
@@ -242,26 +277,26 @@ els.apiKey.addEventListener("input", () => {
 
 for (const input of [els.lines, els.fontSize, els.opacity, els.showInterim]) {
   input.addEventListener("input", () => {
-    applyOverlaySettingsToTab().catch((error) => setStatus("error", error.message));
+    applyOverlaySettingsToTab().catch((error) => setStatus(STATE.ERROR, error.message));
   });
 }
 
 els.start.addEventListener("click", () => {
-  startSession().catch((error) => setStatus("error", error.message));
+  startSession().catch((error) => setStatus(STATE.ERROR, error.message));
 });
 
 els.stop.addEventListener("click", () => {
-  stopSession().catch((error) => setStatus("error", error.message));
+  stopSession().catch((error) => setStatus(STATE.ERROR, error.message));
 });
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "STATE") {
+  if (message?.type === MSG.STATE) {
     setStatus(message.state);
   }
 
-  if (message?.type === "ERROR") {
-    setStatus("error", message.message);
+  if (message?.type === MSG.ERROR) {
+    setStatus(STATE.ERROR, message.message);
   }
 });
 
-load().catch((error) => setStatus("error", error.message));
+load().catch((error) => setStatus(STATE.ERROR, error.message));

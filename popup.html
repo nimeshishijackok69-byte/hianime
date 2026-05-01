@@ -11,7 +11,7 @@
       <header class="header">
         <div>
           <h1>Live Subtitles</h1>
-          <p id="statusText">Idle</p>
+          <p id="statusText" title="Idle">Idle</p>
         </div>
         <span id="statusDot" class="status-dot" aria-hidden="true"></span>
       </header>
@@ -19,7 +19,7 @@
       <section class="section">
         <label class="field">
           <span>Deepgram API Key</span>
-          <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="dg_...">
+          <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="dg_..." title="Paste a Deepgram API key. Personal keys commonly start with dg_.">
         </label>
         <div class="button-row">
           <button id="saveKey" type="button">Save</button>
@@ -59,6 +59,7 @@
       </section>
     </main>
 
+    <script src="constants.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

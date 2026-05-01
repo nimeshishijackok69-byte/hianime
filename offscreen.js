@@ -1,5 +1,11 @@
+const { MSG, STATE } = globalThis.HIANIME;
+
 const DEEPGRAM_BASE_URL = "wss://api.deepgram.com/v1/listen";
 const TARGET_SAMPLE_RATE = 16000;
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAYS = [1000, 2000, 4000];
+const BACKPRESSURE_LIMIT_BYTES = 1_000_000;
+const KEEPALIVE_INTERVAL_MS = 8000;
 
 let session = null;
 let lastInterimText = "";
@@ -12,14 +18,14 @@ function sendRuntimeMessage(message) {
 
 function setState(state) {
   return sendRuntimeMessage({
-    type: "OFFSCREEN_STATE",
+    type: MSG.OFFSCREEN_STATE,
     state
   });
 }
 
 function reportError(code, message) {
   return sendRuntimeMessage({
-    type: "OFFSCREEN_ERROR",
+    type: MSG.OFFSCREEN_ERROR,
     code,
     message
   });
@@ -74,13 +80,27 @@ async function forwardTranscript(tabId, event) {
   }
 
   await sendRuntimeMessage({
-    type: "OFFSCREEN_TRANSCRIPT",
+    type: MSG.OFFSCREEN_TRANSCRIPT,
     tabId,
     event
   });
 }
 
+function clearConnectionTimers(current) {
+  if (current.reconnectTimer) {
+    clearTimeout(current.reconnectTimer);
+    current.reconnectTimer = null;
+  }
+
+  if (current.keepAliveTimer) {
+    clearInterval(current.keepAliveTimer);
+    current.keepAliveTimer = null;
+  }
+}
+
 async function disposeSessionResources(current) {
+  clearConnectionTimers(current);
+
   try {
     if (current.websocket?.readyState === WebSocket.OPEN) {
       current.websocket.send(JSON.stringify({ type: "Finalize" }));
@@ -109,7 +129,7 @@ async function disposeSessionResources(current) {
 }
 
 async function stopSession(options = {}) {
-  const finalState = options.finalState || "idle";
+  const finalState = options.finalState || STATE.IDLE;
 
   if (!session) {
     await setState(finalState);
@@ -117,17 +137,92 @@ async function stopSession(options = {}) {
   }
 
   intentionalStop = true;
-  await setState("stopping");
+  await setState(STATE.STOPPING);
 
   const current = session;
   session = null;
   await disposeSessionResources(current);
 
   await sendRuntimeMessage({
-    type: "OFFSCREEN_CLEAR_INTERIM",
+    type: MSG.OFFSCREEN_CLEAR_INTERIM,
     tabId: current.tabId
   });
   await setState(finalState);
+}
+
+function connectDeepgram(current, attempt = 0) {
+  if (session !== current || intentionalStop) {
+    return;
+  }
+
+  clearConnectionTimers(current);
+  setState(STATE.CONNECTING_DEEPGRAM);
+
+  const websocket = new WebSocket(buildDeepgramUrl(current.config), ["token", current.config.apiKey]);
+  websocket.binaryType = "arraybuffer";
+  current.websocket = websocket;
+  current.reconnectAttempt = attempt;
+  current.backpressureWarned = false;
+
+  websocket.addEventListener("open", async () => {
+    if (session !== current || intentionalStop) {
+      websocket.close();
+      return;
+    }
+
+    current.keepAliveTimer = setInterval(() => {
+      if (session === current && websocket.readyState === WebSocket.OPEN) {
+        websocket.send(JSON.stringify({ type: "KeepAlive" }));
+      }
+    }, KEEPALIVE_INTERVAL_MS);
+
+    await setState(STATE.LISTENING);
+    if (current.audioContext.state === "suspended") {
+      await current.audioContext.resume();
+    }
+  });
+
+  websocket.addEventListener("message", (event) => {
+    try {
+      const payload = JSON.parse(event.data);
+      const transcriptEvent = normalizeDeepgramResult(payload);
+      if (transcriptEvent && session === current) {
+        forwardTranscript(current.tabId, transcriptEvent);
+      }
+    } catch {
+      reportError("DG_PARSE", "Deepgram sent an unreadable transcript event");
+    }
+  });
+
+  websocket.addEventListener("error", () => {
+    // The close event carries retry/auth handling. Avoid noisy duplicate errors here.
+  });
+
+  websocket.addEventListener("close", (event) => {
+    clearConnectionTimers(current);
+    if (session !== current || intentionalStop) {
+      return;
+    }
+
+    const authish = event.code === 1008 || event.code === 1011;
+    if (authish) {
+      reportError("DG_AUTH", "Deepgram auth failed");
+      stopSession({ finalState: STATE.ERROR });
+      return;
+    }
+
+    if (attempt < MAX_RECONNECT_ATTEMPTS) {
+      const delay = RECONNECT_DELAYS[attempt] || RECONNECT_DELAYS[RECONNECT_DELAYS.length - 1];
+      current.reconnectTimer = setTimeout(() => {
+        connectDeepgram(current, attempt + 1);
+      }, delay);
+      setState(STATE.CONNECTING_DEEPGRAM);
+      return;
+    }
+
+    reportError("DG_CLOSED", "Deepgram connection closed");
+    stopSession({ finalState: STATE.ERROR });
+  });
 }
 
 async function startSession(tabId, config) {
@@ -148,9 +243,9 @@ async function startSession(tabId, config) {
   let audioContext = null;
 
   try {
-    await setState("awaiting_capture_permission");
+    await setState(STATE.AWAITING_CAPTURE_PERMISSION);
     await sendRuntimeMessage({
-      type: "OFFSCREEN_CLEAR_ALL",
+      type: MSG.OFFSCREEN_CLEAR_ALL,
       tabId
     });
 
@@ -172,11 +267,11 @@ async function startSession(tabId, config) {
         track.stop();
       }
       await reportError("NO_AUDIO_TRACK", "No shared audio detected");
-      await setState("idle");
+      await setState(STATE.IDLE);
       return;
     }
 
-    await setState("capturing");
+    await setState(STATE.CAPTURING);
 
     const audioStream = new MediaStream([audioTrack]);
     audioContext = new AudioContext();
@@ -189,7 +284,10 @@ async function startSession(tabId, config) {
       outputChannelCount: [1],
       processorOptions: {
         targetSampleRate: TARGET_SAMPLE_RATE,
-        chunkMs: config.chunkMs || 40
+        chunkMs: config.chunkMs || 40,
+        vadEnabled: config.vadEnabled !== false,
+        vadThreshold: config.vadThreshold || 0.012,
+        vadHangoverMs: config.vadHangoverMs || 250
       }
     });
     const silenceNode = audioContext.createGain();
@@ -199,10 +297,6 @@ async function startSession(tabId, config) {
     workletNode.connect(silenceNode);
     silenceNode.connect(audioContext.destination);
 
-    await setState("connecting_deepgram");
-    const websocket = new WebSocket(buildDeepgramUrl(config), ["token", config.apiKey]);
-    websocket.binaryType = "arraybuffer";
-
     session = {
       tabId,
       config,
@@ -211,59 +305,38 @@ async function startSession(tabId, config) {
       sourceNode,
       workletNode,
       silenceNode,
-      websocket
+      websocket: null,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      keepAliveTimer: null,
+      backpressureWarned: false
     };
+    const current = session;
 
     audioTrack.addEventListener("ended", () => {
-      if (!intentionalStop) {
+      if (session === current && !intentionalStop) {
         stopSession();
       }
     });
 
     workletNode.port.onmessage = (event) => {
-      if (event.data?.type !== "PCM_CHUNK") {
+      if (event.data?.type !== MSG.PCM_CHUNK || session !== current) {
         return;
       }
 
-      if (session?.websocket?.readyState === WebSocket.OPEN) {
-        session.websocket.send(event.data.buffer);
+      if (current.websocket?.readyState !== WebSocket.OPEN) {
+        return;
       }
+
+      if (current.websocket.bufferedAmount > BACKPRESSURE_LIMIT_BYTES) {
+        current.backpressureWarned = true;
+        return;
+      }
+
+      current.websocket.send(event.data.buffer);
     };
 
-    websocket.addEventListener("open", async () => {
-      await setState("listening");
-      if (audioContext.state === "suspended") {
-        await audioContext.resume();
-      }
-    });
-
-    websocket.addEventListener("message", (event) => {
-      try {
-        const payload = JSON.parse(event.data);
-        const transcriptEvent = normalizeDeepgramResult(payload);
-        if (transcriptEvent) {
-          forwardTranscript(tabId, transcriptEvent);
-        }
-      } catch {
-        reportError("DG_PARSE", "Deepgram sent an unreadable transcript event");
-      }
-    });
-
-    websocket.addEventListener("error", () => {
-      if (!intentionalStop) {
-        reportError("DG_NETWORK", "Deepgram network error");
-      }
-    });
-
-    websocket.addEventListener("close", (event) => {
-      if (intentionalStop) {
-        return;
-      }
-
-      const authish = event.code === 1008 || event.code === 1011;
-      reportError(authish ? "DG_AUTH" : "DG_CLOSED", authish ? "Deepgram auth failed" : "Deepgram connection closed");
-      stopSession({ finalState: "error" });
-    });
+    connectDeepgram(current);
 
   } catch (error) {
     if (!session) {
@@ -294,13 +367,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === "START") {
+  if (message.type === MSG.START) {
     startSession(message.tabId, message.config);
     sendResponse({ ok: true });
     return false;
   }
 
-  if (message.type === "STOP") {
+  if (message.type === MSG.STOP) {
     stopSession();
     sendResponse({ ok: true });
     return false;

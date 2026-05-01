@@ -20,6 +20,6 @@
     "default_popup": "popup.html"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src wss://api.deepgram.com https://api.deepgram.com;"
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src wss: https://api.deepgram.com;"
   }
 }
