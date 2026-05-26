@@ -52,8 +52,9 @@
         z-index: 2147483647;
         width: min(80vw, 760px);
         max-width: min(80vw, 980px);
-        pointer-events: auto;
-        user-select: text;
+        pointer-events: auto !important;
+        -webkit-user-select: text !important;
+        user-select: text !important;
         color: #ffffff;
         text-align: center;
         line-height: 1.35;
@@ -89,7 +90,8 @@
         color: #ffffff;
         cursor: pointer;
         font: 700 12px/1 "Segoe UI", Arial, sans-serif;
-        user-select: none;
+        -webkit-user-select: none !important;
+        user-select: none !important;
       }
 
       #${ROOT_ID} .dg-drag-handle {
@@ -100,6 +102,10 @@
       #${ROOT_ID} .dg-interim-line {
         min-height: 1.35em;
         overflow-wrap: anywhere;
+        pointer-events: auto !important;
+        -webkit-user-select: text !important;
+        user-select: text !important;
+        cursor: text;
       }
 
       #${ROOT_ID} .dg-final-line {
@@ -127,6 +133,8 @@
       root = document.createElement("div");
       root.id = ROOT_ID;
       root.setAttribute("aria-live", "polite");
+      root.setAttribute("lang", "ja");
+      root.setAttribute("translate", "no");
       (document.body || document.documentElement).appendChild(root);
     }
 
@@ -175,6 +183,8 @@
 
     const lineGroup = document.createElement("div");
     lineGroup.className = "dg-line-group";
+    lineGroup.setAttribute("lang", "ja");
+    lineGroup.setAttribute("translate", "no");
     root.appendChild(lineGroup);
     state.lineGroup = lineGroup;
 
