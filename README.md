@@ -1,4 +1,4 @@
-# HiAnime — Live Japanese Subtitles (Chrome Extension)
+# LiveSubs — Real-time Japanese Subtitles (Chrome Extension)
 
 A Chrome extension (Manifest V3) that captures tab audio and streams it to [Deepgram](https://deepgram.com) for real-time Japanese speech-to-text transcription, displayed as an overlay on the page.
 
@@ -117,7 +117,7 @@ The content script creates a fixed-position overlay at the bottom-center of the 
 1. Open Chrome and navigate to `chrome://extensions`
 2. Enable **Developer mode** (toggle in top-right corner)
 3. Click **"Load unpacked"**
-4. Select the `hianime` folder
+4. Select the `livesubs` folder
 5. The extension icon should appear in the toolbar
 
 ### Usage

@@ -1,4 +1,4 @@
-const { MSG, STATE } = globalThis.HIANIME;
+const { MSG, STATE } = globalThis.LIVESUBS;
 
 const DEFAULTS = {
   deepgramApiKey: "",

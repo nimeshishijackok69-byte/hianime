@@ -1,5 +1,5 @@
 (function () {
-  const { MSG } = globalThis.HIANIME || {
+  const { MSG } = globalThis.LIVESUBS || {
     MSG: {
       APPLY_SETTINGS: "APPLY_SETTINGS",
       DG_TRANSCRIPT: "DG_TRANSCRIPT",

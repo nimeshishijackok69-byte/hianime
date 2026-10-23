@@ -1,4 +1,4 @@
-# HiAnime Extension Context
+# LiveSubs Extension Context
 
 ## What This Project Is
 
@@ -165,7 +165,7 @@ Important implication:
 
 This file defines the shared protocol and state constants used across the extension.
 
-It creates `globalThis.HIANIME` with:
+It creates `globalThis.LIVESUBS` with:
 
 - `MSG`: all message type names
 - `STATE`: all session state values

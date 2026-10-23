@@ -1,6 +1,6 @@
 import "./constants.js";
 
-const { MSG, STATE } = globalThis.HIANIME;
+const { MSG, STATE } = globalThis.LIVESUBS;
 const OFFSCREEN_DOCUMENT = "offscreen.html";
 
 let creatingOffscreen = null;

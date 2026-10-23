@@ -32,7 +32,7 @@
     ERROR: "error"
   });
 
-  globalThis.HIANIME = Object.freeze({
+  globalThis.LIVESUBS = Object.freeze({
     MSG,
     STATE
   });

@@ -1,4 +1,4 @@
-const { MSG, STATE } = globalThis.HIANIME;
+const { MSG, STATE } = globalThis.LIVESUBS;
 
 const DEEPGRAM_BASE_URL = "wss://api.deepgram.com/v1/listen";
 const TARGET_SAMPLE_RATE = 16000;
