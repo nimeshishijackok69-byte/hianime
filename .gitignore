@@ -1,0 +1,16 @@
+# Sensitive
+.env
+passs*
+*.key
+*.pem
+*.crx
+
+# Dependencies / builds
+node_modules/
+dist/
+web-ext-artifacts/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
