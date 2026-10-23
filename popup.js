@@ -79,7 +79,14 @@ function getSessionConfig() {
     ...getOverlayConfig(),
     apiKey: getApiKey(),
     language: "ja",
-    model: "nova-3"
+    model: "nova-3",
+    // Keep the audio stream continuous: the client-side VAD gate removed
+    // trailing silence, which starved Deepgram's endpointer of the
+    // post-speech silence it needs to emit finals (endpointing counts
+    // received audio, not wall clock). Deepgram's server-side VAD
+    // (utterance_end_ms + vad_events) replaces it.
+    vadEnabled: false,
+    utteranceEndMs: 700
   };
 }
 

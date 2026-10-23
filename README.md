@@ -10,11 +10,11 @@ Works wherever subtitles don't: **Crunchyroll** (off-screen tags), **Netflix JP 
 
 **Highlights**
 
-- ⚡ **Real-time** — interim results stream in as they're spoken, finalized lines settle a moment later
-- 🧠 **Selectable text** — the overlay is normal page DOM, so popup dictionaries like [Yomitan](https://github.com/yomidevs/yomitan) can inspect any word
-- 🔒 **Private by design** — fully client-side; your audio goes from your browser straight to Deepgram, nothing passes through a server, and your API key is stored locally in `chrome.storage.local`
-- 🎛️ **Customizable** — font size, line buffer, background opacity, interim-text toggle — all persisted
-- 🔁 **Survives navigation** — if the tab reloads or navigates, the session is re-injected and keeps running
+- **Real-time** — interim results stream in as they're spoken, finalized lines settle a moment later
+- **Selectable text** — the overlay is normal page DOM, so popup dictionaries like [Yomitan](https://github.com/yomidevs/yomitan) can inspect any word
+- **Private by design** — fully client-side; your audio goes from your browser straight to Deepgram, nothing passes through a server, and your API key is stored locally in `chrome.storage.local`
+- **Customizable** — font size, line buffer, background opacity, interim-text toggle — all persisted
+- **Survives navigation** — if the tab reloads or navigates, the session is re-injected and keeps running
 
 > Bring your own [Deepgram](https://deepgram.com) API key (free $200 trial credit, ~43k minutes of transcription at no cost).
 
@@ -91,9 +91,10 @@ The `PcmCaptureProcessor` AudioWorkletProcessor:
 The offscreen document opens a WebSocket to `wss://api.deepgram.com/v1/listen`:
 
 - **Authentication**: `new WebSocket(url, ["token", apiKey])`
-- **Query params**: `language=ja`, `encoding=linear16`, `sample_rate=16000`, `interim_results=true`, `endpointing=250`
+- **Query params**: `model=nova-3`, `language=ja`, `encoding=linear16`, `sample_rate=16000`, `channels=1`, `interim_results=true`, `endpointing=300`, `utterance_end_ms=700`, `vad_events=true`
+- **Server-side VAD**: Deepgram's own VAD decides when an utterance ends (`UtteranceEnd`) — final lines are emitted ~700 ms after speech stops, even over background music. The client sends **all** audio continuously; it does not gate chunks locally, so the endpointer never starves.
 - **Binary messages**: PCM Int16 chunks sent as `ArrayBuffer` via `ws.send()`
-- **Text responses**: JSON with transcript results — `is_final` for final utterances, `speech_final` for end of speech
+- **Text responses**: JSON with transcript results — `is_final` for final utterances, `speech_final` for end of speech, `UtteranceEnd` for server VAD utterance boundaries
 
 Duplicate suppression: Skips forwarding if the text matches the last sent interim or final.
 
@@ -273,3 +274,5 @@ States tracked in `currentState` on the service worker and forwarded to the popu
 - **AudioWorklet instead of ScriptProcessor**: AudioWorklet runs on a separate audio thread, avoiding audio glitches. It's the modern replacement for the deprecated `ScriptProcessorNode`.
 - **`preferCurrentTab`**: New in Chrome 116, avoids the cumbersome "this tab / other tab" UI. Falls back to standard getDisplayMedia on older versions.
 - **Deepgram WebSocket with token auth**: Uses the `["token", apiKey]` WebSocket protocol, keeping the API key out of the URL query string.
+
+- **Server-side VAD instead of a client-side silence gate**: An early build gated the audio stream with a client-side energy VAD (silence chunks were withheld to save bandwidth). That starved Deepgram's silence-based endpointer — it requires post-speech silence in the *received* stream, and withheld audio never arrives, so finals lagged by up to one full sentence. The stream now runs continuously (~32 KB/s — negligible), and Deepgram's server-side VAD (`utterance_end_ms`, more robust to background music than an energy gate) triggers finals ~700 ms after speech stops.
