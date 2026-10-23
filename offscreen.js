@@ -5,6 +5,9 @@ const TARGET_SAMPLE_RATE = 16000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAYS = [1000, 2000, 4000];
 const BACKPRESSURE_LIMIT_BYTES = 1_000_000;
+// ~2 s of 16 kHz mono Int16 audio (32 kB/s). Window kept while the
+// WebSocket is not OPEN so speech just before/at reconnect survives.
+const OFFLINE_BUFFER_LIMIT_BYTES = 65536;
 const KEEPALIVE_INTERVAL_MS = 8000;
 const FINALIZE_GRACE_MS = 1200;
 
@@ -103,6 +106,61 @@ function clearConnectionTimers(current) {
   }
 }
 
+function bufferOfflineChunk(current, buffer) {
+  current.offlineChunks.push(buffer);
+  current.offlineBytes += buffer.byteLength;
+
+  // Bounded window: drop the OLDEST audio so a long outage keeps the
+  // freshest speech instead of growing without bound.
+  while (current.offlineBytes > OFFLINE_BUFFER_LIMIT_BYTES) {
+    const dropped = current.offlineChunks.shift();
+    current.offlineBytes -= dropped.byteLength;
+  }
+}
+
+function flushOfflineBuffer(current) {
+  const websocket = current.websocket;
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  const chunks = current.offlineChunks;
+  if (chunks.length === 0) {
+    return;
+  }
+
+  current.offlineChunks = [];
+  current.offlineBytes = 0;
+
+  for (const buffer of chunks) {
+    try {
+      websocket.send(buffer);
+    } catch {}
+  }
+}
+
+function sendAudioChunk(current, buffer) {
+  const websocket = current.websocket;
+
+  if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+    bufferOfflineChunk(current, buffer);
+    return;
+  }
+
+  // Drain buffered audio BEFORE the new chunk so Deepgram always receives
+  // the stream in its original chronological order.
+  flushOfflineBuffer(current);
+
+  if (websocket.bufferedAmount > BACKPRESSURE_LIMIT_BYTES) {
+    current.backpressureWarned = true;
+    return;
+  }
+
+  try {
+    websocket.send(buffer);
+  } catch {}
+}
+
 function waitForDeepgramFinalize(current) {
   if (current.websocket?.readyState !== WebSocket.OPEN) {
     return Promise.resolve();
@@ -162,6 +220,9 @@ async function disposeSessionResources(current, options = {}) {
   for (const track of current.displayStream?.getTracks() || []) {
     track.stop();
   }
+
+  current.offlineChunks = [];
+  current.offlineBytes = 0;
 }
 
 async function stopSession(options = {}) {
@@ -216,6 +277,11 @@ function connectDeepgram(current, attempt = 0) {
       }
     }, KEEPALIVE_INTERVAL_MS);
 
+    // A successful open means the outage is over: restart the full
+    // reconnect budget and replay audio captured while the socket was down.
+    current.reconnectAttempt = 0;
+    flushOfflineBuffer(current);
+
     await setState(STATE.LISTENING);
     if (current.audioContext.state === "suspended") {
       await current.audioContext.resume();
@@ -254,10 +320,13 @@ function connectDeepgram(current, attempt = 0) {
       return;
     }
 
-    if (attempt < MAX_RECONNECT_ATTEMPTS) {
-      const delay = RECONNECT_DELAYS[attempt] || RECONNECT_DELAYS[RECONNECT_DELAYS.length - 1];
+    if (current.reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+      const nextAttempt = current.reconnectAttempt + 1;
+      const delay =
+        RECONNECT_DELAYS[current.reconnectAttempt] ||
+        RECONNECT_DELAYS[RECONNECT_DELAYS.length - 1];
       current.reconnectTimer = setTimeout(() => {
-        connectDeepgram(current, attempt + 1);
+        connectDeepgram(current, nextAttempt);
       }, delay);
       setState(STATE.CONNECTING_DEEPGRAM);
       return;
@@ -367,7 +436,9 @@ async function startSession(tabId, config) {
       reconnectTimer: null,
       keepAliveTimer: null,
       backpressureWarned: false,
-      finalizeResolve: null
+      finalizeResolve: null,
+      offlineChunks: [],
+      offlineBytes: 0
     };
     const current = session;
 
@@ -382,16 +453,7 @@ async function startSession(tabId, config) {
         return;
       }
 
-      if (current.websocket?.readyState !== WebSocket.OPEN) {
-        return;
-      }
-
-      if (current.websocket.bufferedAmount > BACKPRESSURE_LIMIT_BYTES) {
-        current.backpressureWarned = true;
-        return;
-      }
-
-      current.websocket.send(event.data.buffer);
+      sendAudioChunk(current, event.data.buffer);
     };
 
     connectDeepgram(current);

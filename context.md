@@ -740,6 +740,20 @@ This is useful for transient network failures.
 
 If reconnect attempts are exhausted, the session moves to `error`.
 
+A successful reconnection resets the attempt counter to `0`, so the
+reconnect budget applies per outage rather than cumulatively across the
+whole session.
+
+### Offline audio buffer
+
+While the WebSocket is not OPEN (initial handshake or a reconnect
+outage), incoming PCM chunks are kept in a bounded in-memory window
+(`OFFLINE_BUFFER_LIMIT_BYTES`, ~2 s of audio; oldest chunks are dropped
+first). When the socket reopens, the buffered audio is replayed before
+any new chunks, so Deepgram always receives a chronologically ordered
+stream. This prevents silent subtitle loss during network blips, which
+previously also destroyed the worklet's VAD pre-roll on every outage.
+
 ### Backpressure protection
 
 Before sending binary audio, `offscreen.js` checks `websocket.bufferedAmount`.
