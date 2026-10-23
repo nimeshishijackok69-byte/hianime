@@ -2,12 +2,50 @@ import "./constants.js";
 
 const { MSG, STATE } = globalThis.LIVESUBS;
 const OFFSCREEN_DOCUMENT = "offscreen.html";
+const SESSION_STATE_KEY = "livesubs.sw";
 
 let creatingOffscreen = null;
 let activeTabId = null;
 let currentState = STATE.IDLE;
 let lastOverlayConfig = null;
 let lastTabMessageError = "";
+
+// The MV3 service worker may be suspended after ~30 s of idleness while a
+// session is live (the offscreen document keeps running independently).
+// Persist session state to storage.session and restore it on cold start so
+// the popup, stop/restart paths, and navigation re-injection keep behaving
+// as if the worker had stayed alive.
+let stateLoaded = null;
+
+async function loadSessionState() {
+  if (!stateLoaded) {
+    stateLoaded = chrome.storage.session
+      .get(SESSION_STATE_KEY)
+      .then((stored) => {
+        const snapshot = stored?.[SESSION_STATE_KEY];
+        if (snapshot) {
+          activeTabId = typeof snapshot.activeTabId === "number" ? snapshot.activeTabId : null;
+          currentState = typeof snapshot.currentState === "string" ? snapshot.currentState : STATE.IDLE;
+          lastOverlayConfig = snapshot.lastOverlayConfig || null;
+        }
+      })
+      .catch(() => {});
+  }
+
+  return stateLoaded;
+}
+
+function persistSessionState() {
+  chrome.storage.session
+    .set({
+      [SESSION_STATE_KEY]: {
+        activeTabId,
+        currentState,
+        lastOverlayConfig
+      }
+    })
+    .catch(() => {});
+}
 
 async function getOffscreenContexts() {
   const offscreenUrl = chrome.runtime.getURL(OFFSCREEN_DOCUMENT);
@@ -118,11 +156,13 @@ async function ensureOverlayAndSend(tabId, message) {
 }
 
 async function startSession({ tabId, config }) {
+  await loadSessionState();
   const overlayConfig = getOverlayConfig(config);
 
   activeTabId = tabId;
   lastOverlayConfig = overlayConfig;
   currentState = STATE.CREATING_OFFSCREEN;
+  persistSessionState();
 
   await ensureOverlayAndSend(tabId, {
     type: MSG.CLEAR_ALL
@@ -143,9 +183,11 @@ async function startSession({ tabId, config }) {
 }
 
 async function stopSession() {
+  await loadSessionState();
   if (!(await hasOffscreenDocument())) {
     currentState = STATE.IDLE;
     activeTabId = null;
+    persistSessionState();
     chrome.runtime.sendMessage({
       type: MSG.STATE,
       state: STATE.IDLE
@@ -180,6 +222,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   const run = async () => {
+    await loadSessionState();
     switch (message.type) {
       case MSG.ENSURE_OFFSCREEN:
         return {
@@ -204,10 +247,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
 
       case MSG.OFFSCREEN_STATE:
+        await loadSessionState();
         currentState = message.state;
         if (message.state === STATE.IDLE) {
           activeTabId = null;
         }
+        persistSessionState();
         chrome.runtime.sendMessage({
           type: MSG.STATE,
           state: message.state
@@ -218,7 +263,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true };
 
       case MSG.OFFSCREEN_ERROR:
+        await loadSessionState();
         currentState = STATE.ERROR;
+        persistSessionState();
         chrome.runtime.sendMessage({
           type: MSG.ERROR,
           code: message.code,
@@ -263,7 +310,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  await loadSessionState();
   if (tabId !== activeTabId || changeInfo.status !== "complete" || currentState === STATE.IDLE) {
     return;
   }

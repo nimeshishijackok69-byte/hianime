@@ -448,6 +448,12 @@ This is the most important section if you want to understand how the whole app w
    - `activeTabId`
    - `lastOverlayConfig`
    - `currentState = creating_offscreen`
+   - The same snapshot is written to `chrome.storage.session` (and
+     refreshed on every service-worker state change), because Chrome may
+     suspend the service worker mid-session: a cold-started worker
+     restores this snapshot so the popup, Stop, and navigation
+     re-injection continue to behave correctly while the live session is
+     owned by the offscreen document.
 6. The worker ensures the overlay exists in the target tab.
 7. The worker clears any previous subtitle lines.
 8. The worker applies current overlay settings to the tab.
