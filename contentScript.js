@@ -321,6 +321,7 @@
 
   function removeOverlay() {
     state.root?.remove();
+    document.getElementById(STYLE_ID)?.remove();
     state.root = null;
     state.lineGroup = null;
     state.finalNodes = [];
@@ -350,7 +351,9 @@
     }
 
     if (message.type === MSG.CLEAR_INTERIM) {
-      state.interimNode.textContent = "";
+      if (state.interimNode) {
+        state.interimNode.textContent = "";
+      }
       return;
     }
 

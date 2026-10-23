@@ -312,6 +312,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         return { ok: true };
 
+      case MSG.OFFSCREEN_REMOVE_OVERLAY:
+        if (message.tabId) {
+          // Direct send, never inject: if the content script is gone the
+          // overlay is gone with it, and we must not inject just to delete.
+          await sendToTab(message.tabId, {
+            type: MSG.REMOVE_OVERLAY
+          });
+        }
+        return { ok: true };
+
       default:
         return { ok: false, error: "Unknown message type." };
     }

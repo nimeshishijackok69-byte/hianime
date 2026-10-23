@@ -251,6 +251,10 @@ async function stopSession(options = {}) {
     type: MSG.OFFSCREEN_CLEAR_INTERIM,
     tabId: current.tabId
   });
+  await sendRuntimeMessage({
+    type: MSG.OFFSCREEN_REMOVE_OVERLAY,
+    tabId: current.tabId
+  });
   await setState(finalState);
 }
 
