@@ -469,19 +469,23 @@ async function startSession(tabId, config) {
       });
     }
 
-    await stopSession();
-
+    // Report BEFORE stopping: stopSession broadcasts STATE idle and the
+    // service worker closes this document, so an error reported after
+    // teardown races the teardown and can be silently swallowed.
     if (error?.name === "NotAllowedError") {
       await reportError("CAPTURE_DENIED", "Permission denied");
+      await stopSession();
       return;
     }
 
     if (error?.name === "NotFoundError") {
       await reportError("NO_AUDIO_TRACK", "No shared audio detected");
+      await stopSession();
       return;
     }
 
     await reportError("START_FAILED", error?.message || "Unable to start capture");
+    await stopSession();
   }
 }
 

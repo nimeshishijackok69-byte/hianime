@@ -74,8 +74,15 @@ async function ensureOffscreenDocument() {
     });
   }
 
-  await creatingOffscreen;
-  creatingOffscreen = null;
+  try {
+    await creatingOffscreen;
+    creatingOffscreen = null;
+  } catch (error) {
+    // A cached rejected promise would poison every subsequent start until
+    // the (suspendable) service worker happened to restart.
+    creatingOffscreen = null;
+    throw error;
+  }
 }
 
 async function closeOffscreenDocumentIfPresent() {
@@ -164,20 +171,32 @@ async function startSession({ tabId, config }) {
   currentState = STATE.CREATING_OFFSCREEN;
   persistSessionState();
 
-  await ensureOverlayAndSend(tabId, {
-    type: MSG.CLEAR_ALL
-  });
-  await ensureOverlayAndSend(tabId, {
-    type: MSG.APPLY_SETTINGS,
-    config: overlayConfig
-  });
-  await ensureOffscreenDocument();
-  await chrome.runtime.sendMessage({
-    type: MSG.START,
-    target: "offscreen",
-    tabId,
-    config
-  });
+  try {
+    await ensureOverlayAndSend(tabId, {
+      type: MSG.CLEAR_ALL
+    });
+    await ensureOverlayAndSend(tabId, {
+      type: MSG.APPLY_SETTINGS,
+      config: overlayConfig
+    });
+    await ensureOffscreenDocument();
+    await chrome.runtime.sendMessage({
+      type: MSG.START,
+      target: "offscreen",
+      tabId,
+      config
+    });
+  } catch (error) {
+    // Early failures (injection refused, offscreen creation failed) left
+    // currentState parked in creating_offscreen forever. Reset so the
+    // popup and started-state logic return to a sane idle.
+    currentState = STATE.IDLE;
+    activeTabId = null;
+    lastOverlayConfig = null;
+    persistSessionState();
+    closeOffscreenDocumentIfPresent().catch(() => {});
+    throw error;
+  }
 
   return { ok: true };
 }

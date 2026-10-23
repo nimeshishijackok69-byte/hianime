@@ -116,6 +116,14 @@ function updateStartState() {
 }
 
 function setStatus(state, detail = "") {
+  const previous = els.statusDot.dataset.state || STATE.IDLE;
+
+  // A same-state broadcast without detail (e.g. a repeated ERROR after the
+  // diagnostic was already shown) must not erase the current text.
+  if (state === previous && !detail) {
+    return;
+  }
+
   const text = detail || STATUS_LABELS[state] || state;
   els.statusDot.dataset.state = state;
   els.statusText.textContent = text;
@@ -298,6 +306,15 @@ els.stop.addEventListener("click", () => {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === MSG.STATE) {
+    // Teardown broadcasts IDLE right after an error was reported; keep the
+    // failure visible until the user acts (Start/Stop reset the status).
+    if (
+      message.state === STATE.IDLE &&
+      (els.statusDot.dataset.state || STATE.IDLE) === STATE.ERROR
+    ) {
+      return;
+    }
+
     setStatus(message.state);
   }
 
