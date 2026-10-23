@@ -1,6 +1,22 @@
 # LiveSubs — Real-time Japanese Subtitles (Chrome Extension)
 
-A Chrome extension (Manifest V3) that captures tab audio and streams it to [Deepgram](https://deepgram.com) for real-time Japanese speech-to-text transcription, displayed as an overlay on the page.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Chrome](https://img.shields.io/badge/Chrome-116%2B-green.svg)](https://www.google.com/chrome/)
+![Manifest Version: 3](https://img.shields.io/badge/Manifest-V3-orange.svg)
+
+**LiveSubs** turns any tab playing Japanese audio into a live-captioned experience. It captures the tab's audio locally, streams it to Deepgram's real-time speech-to-text, and overlays the transcript on the page — like closed captions for sites that don't have them.
+
+Works wherever subtitles don't: **Crunchyroll** (off-screen tags), **Netflix JP content**, **YouTube** (Japanese channels without captions), niche streaming sites, live streams, and more.
+
+**Highlights**
+
+- ⚡ **Real-time** — interim results stream in as they're spoken, finalized lines settle a moment later
+- 🧠 **Selectable text** — the overlay is normal page DOM, so popup dictionaries like [Yomitan](https://github.com/yomidevs/yomitan) can inspect any word
+- 🔒 **Private by design** — fully client-side; your audio goes from your browser straight to Deepgram, nothing passes through a server, and your API key is stored locally in `chrome.storage.local`
+- 🎛️ **Customizable** — font size, line buffer, background opacity, interim-text toggle — all persisted
+- 🔁 **Survives navigation** — if the tab reloads or navigates, the session is re-injected and keeps running
+
+> Bring your own [Deepgram](https://deepgram.com) API key (free $200 trial credit, ~43k minutes of transcription at no cost).
 
 ---
 
