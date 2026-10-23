@@ -758,9 +758,20 @@ previously also destroyed the worklet's VAD pre-roll on every outage.
 
 Before sending binary audio, `offscreen.js` checks `websocket.bufferedAmount`.
 
-If buffered bytes exceed `BACKPRESSURE_LIMIT_BYTES`, the chunk is dropped rather than allowing the browser buffer to grow without bound.
+If buffered bytes exceed `BACKPRESSURE_LIMIT_BYTES` (16 KB, roughly
+500 ms of audio), the chunk is dropped rather than allowing the browser
+buffer to grow without bound. The small limit keeps worst-case subtitle
+lag capped at ~half a second; the large 1 MB value previously queued
+~31 s of audio before triggering.
 
-This prevents runaway memory growth and helps preserve near-real-time behavior.
+### Transcript relay non-blocking
+
+The service worker acknowledges transcript relay messages immediately
+instead of waiting for tab delivery (including any content-script
+re-injection fallback). Deliveries are chained through a single promise
+so ordering is preserved — a stale interim can never render after its
+final — while per-transcript latency no longer pays for injection
+fallbacks.
 
 
 ## Transcript Handling

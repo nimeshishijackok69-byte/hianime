@@ -77,6 +77,25 @@ async function sendToTab(tabId, message) {
   }
 }
 
+// Transcripts are delivered off the response path (the offscreen caller
+// never reads the reply), but they are chained so that messages can never
+// interleave — a stale interim must not render after its final.
+let transcriptDelivery = Promise.resolve();
+
+function deliverTranscript(message) {
+  transcriptDelivery = transcriptDelivery.then(() =>
+    ensureOverlayAndSend(message.tabId, {
+      type: MSG.DG_TRANSCRIPT,
+      isFinal: message.event.isFinal,
+      text: message.event.text,
+      ts: message.event.ts
+    })
+  ).catch(() => {
+    // Best-effort: delivery failures surface via the next event's
+    // injection retry; nothing here needs to reject the chain.
+  });
+}
+
 async function ensureOverlayAndSend(tabId, message) {
   let delivered = await sendToTab(tabId, message);
   if (delivered) {
@@ -208,12 +227,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true };
 
       case MSG.OFFSCREEN_TRANSCRIPT:
-        await ensureOverlayAndSend(message.tabId, {
-          type: MSG.DG_TRANSCRIPT,
-          isFinal: message.event.isFinal,
-          text: message.event.text,
-          ts: message.event.ts
-        });
+        deliverTranscript(message);
         return { ok: true };
 
       case MSG.OFFSCREEN_CLEAR_INTERIM:

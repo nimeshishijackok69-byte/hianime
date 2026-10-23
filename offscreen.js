@@ -4,7 +4,10 @@ const DEEPGRAM_BASE_URL = "wss://api.deepgram.com/v1/listen";
 const TARGET_SAMPLE_RATE = 16000;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAYS = [1000, 2000, 4000];
-const BACKPRESSURE_LIMIT_BYTES = 1_000_000;
+// WS send-buffer ceiling. At 32 kB/s of PCM, 16 KB = ~500 ms: under network
+// stalls we start dropping chunks near-live instead of accumulating ~31 s
+// of lag at a 1 MB limit (which made subtitles appear tens of seconds late).
+const BACKPRESSURE_LIMIT_BYTES = 16_384;
 // ~2 s of 16 kHz mono Int16 audio (32 kB/s). Window kept while the
 // WebSocket is not OPEN so speech just before/at reconnect survives.
 const OFFLINE_BUFFER_LIMIT_BYTES = 65536;
